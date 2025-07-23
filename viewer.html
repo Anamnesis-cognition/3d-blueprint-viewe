@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Blueprint Viewer</title>
     <style>
-        body { margin: 0; background-color: #1a1a33; color: #fff; overflow: hidden; }
+        body { margin: 0; background-color: #1a1a33; color: #fff; font-family: sans-serif; overflow: hidden; }
         canvas { display: block; }
         #info-panel {
             position: absolute;
@@ -26,14 +26,18 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            color: red;
-            background: #fff;
-            padding: 20px;
-            border-radius: 5px;
-            font-size: 1.2em;
-            text-align: center;
+            color: #ffcccc;
+            background: #4d1a1a;
+            border: 1px solid #ff4d4d;
+            padding: 25px;
+            border-radius: 8px;
+            font-size: 1em;
+            text-align: left;
             z-index: 100;
+            max-width: 80%;
+            line-height: 1.5;
         }
+        .error-message a { color: #87ceeb; }
     </style>
 </head>
 <body>
@@ -54,13 +58,10 @@
         import { OrbitControls } from 'OrbitControls';
 
         // --- CONFIGURATION ---
-        const COLORS = {
-            stud: new THREE.Color(0xccb28c),
-            plate: new THREE.Color(0xb29973),
-            header: new THREE.Color(0x99664c),
-            truss: new THREE.Color(0xbfb280)
-        };
+        const COLORS = { stud: new THREE.Color(0xccb28c), plate: new THREE.Color(0xb29973), header: new THREE.Color(0x99664c), truss: new THREE.Color(0xbfb280) };
         const LUMBER_SIZES = { "2x4": { w: 1.5, d: 3.5 } };
+        const RETRY_ATTEMPTS = 5;
+        const RETRY_DELAY_MS = 1500;
 
         // --- SCENE SETUP ---
         const scene = new THREE.Scene();
@@ -69,16 +70,12 @@
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
-
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
-        
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
-        scene.add(ambientLight);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8));
         const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
         directionalLight.position.set(200, 300, 200);
         scene.add(directionalLight);
-
         const modelContainer = new THREE.Group();
         scene.add(modelContainer);
 
@@ -88,103 +85,9 @@
             return new THREE.Mesh(geometry, material);
         }
 
-        // --- *** FINAL CORRECTED WALL LOGIC *** ---
-        function processWall(wallData) {
-            const start = new THREE.Vector3(...wallData.start_point);
-            const end = new THREE.Vector3(...wallData.end_point);
-            const height = wallData.height || 108;
-            const studSize = LUMBER_SIZES["2x4"];
-
-            const wallGroup = new THREE.Group();
-            const direction = new THREE.Vector3().subVectors(end, start);
-            const length = direction.length();
-
-            // STEP 1: Build the wall flat at the origin, pointing down the Z-axis
-            const bottomPlate = createCuboidMesh({ w: studSize.w, h: studSize.d, d: length }, COLORS.plate);
-            bottomPlate.position.set(0, studSize.d / 2, length / 2);
-            const topPlate = createCuboidMesh({ w: studSize.w, h: studSize.d, d: length }, COLORS.plate);
-            topPlate.position.set(0, height - studSize.d / 2, length / 2);
-            wallGroup.add(bottomPlate, topPlate);
-
-            const openingZones = [];
-            (wallData.openings || []).forEach(op => {
-                const opStart = op.distance_from_start;
-                const opWidth = op.width;
-                const opHeight = op.height;
-                const headerSpec = op.header_spec;
-                openingZones.push({ start: opStart, end: opStart + opWidth });
-
-                const header = createCuboidMesh({w: headerSpec.width, h: headerSpec.depth, d: opWidth}, COLORS.header);
-                header.position.set(0, opHeight + headerSpec.depth/2, opStart + opWidth/2);
-                wallGroup.add(header);
-
-                const jackStudHeight = opHeight - studSize.d;
-                const jackStud1 = createCuboidMesh({w: studSize.w, h: jackStudHeight, d: studSize.d}, COLORS.stud);
-                jackStud1.position.set(0, jackStudHeight/2 + studSize.d, opStart + studSize.d/2);
-                const jackStud2 = createCuboidMesh({w: studSize.w, h: jackStudHeight, d: studSize.d}, COLORS.stud);
-                jackStud2.position.set(0, jackStudHeight/2 + studSize.d, opStart + opWidth - studSize.d/2);
-                wallGroup.add(jackStud1, jackStud2);
-            });
-
-            for (let pos = 0; pos < length; pos += 16) {
-                const studZ = pos + studSize.d / 2;
-                const isInOpening = openingZones.some(zone => studZ >= zone.start && studZ < zone.end);
-                if (!isInOpening) {
-                    const studHeight = height - (2 * studSize.d);
-                    const stud = createCuboidMesh({w: studSize.w, h: studHeight, d: studSize.d}, COLORS.stud);
-                    stud.position.set(0, studHeight/2 + studSize.d, pos + studSize.d/2);
-                    wallGroup.add(stud);
-                }
-            }
-            
-            // STEP 2: Position the group at the start point and make it look at the end point.
-            wallGroup.position.copy(start);
-            wallGroup.lookAt(end);
-            modelContainer.add(wallGroup);
-        }
-        
-        function processRoof(roofData) {
-            const footprint = roofData.footprint_polygon.map(p => new THREE.Vector3(...p));
-            const trussGroupData = roofData.components.find(c => c.type === 'truss_group');
-            if (!trussGroupData) return;
-
-            const spacing = trussGroupData.spacing;
-            const trussDef = trussGroupData.truss_definition;
-            const span = trussDef.span;
-            const pitch = trussDef.pitch;
-            const pitchAngle = Math.atan(pitch.rise / pitch.run);
-            const peakHeight = (span / 2) * Math.tan(pitchAngle);
-            const topChordLen = Math.sqrt(Math.pow(span / 2, 2) + Math.pow(peakHeight, 2));
-
-            const depthVec = new THREE.Vector3().subVectors(footprint[3], footprint[0]);
-            const depth = depthVec.length();
-            const depthDir = depthVec.normalize();
-            
-            const lumberW = LUMBER_SIZES["2x4"].w;
-            const lumberD = LUMBER_SIZES["2x4"].d;
-
-            for (let d = 0; d <= depth; d += spacing) {
-                const trussOrigin = new THREE.Vector3().copy(footprint[0]).addScaledVector(depthDir, d);
-                const truss = new THREE.Group();
-                truss.position.copy(trussOrigin);
-                
-                const bottomChord = createCuboidMesh({w: span, h: lumberD, d: lumberW}, COLORS.truss);
-                bottomChord.position.set(span / 2, lumberD / 2, 0);
-                truss.add(bottomChord);
-
-                const topChord1 = createCuboidMesh({w: topChordLen, h: lumberD, d: lumberW}, COLORS.truss);
-                topChord1.rotation.z = pitchAngle;
-                topChord1.position.set(span / 4, peakHeight / 2 + lumberD / 2, 0);
-                truss.add(topChord1);
-                
-                const topChord2 = createCuboidMesh({w: topChordLen, h: lumberD, d: lumberW}, COLORS.truss);
-                topChord2.rotation.z = -pitchAngle;
-                topChord2.position.set(span * 3 / 4, peakHeight / 2 + lumberD / 2, 0);
-                truss.add(topChord2);
-
-                modelContainer.add(truss);
-            }
-        }
+        // --- Wall and Roof processing functions (unchanged) ---
+        function processWall(wallData){ const start=new THREE.Vector3(...wallData.start_point); const end=new THREE.Vector3(...wallData.end_point); const height=wallData.height||108; const studSize=LUMBER_SIZES["2x4"]; const wallGroup=new THREE.Group(); const direction=new THREE.Vector3().subVectors(end,start); const length=direction.length(); const bottomPlate=createCuboidMesh({w:studSize.w,h:studSize.d,d:length},COLORS.plate); bottomPlate.position.set(0,studSize.d/2,length/2); const topPlate=createCuboidMesh({w:studSize.w,h:studSize.d,d:length},COLORS.plate); topPlate.position.set(0,height-studSize.d/2,length/2); wallGroup.add(bottomPlate,topPlate); const openingZones=[]; (wallData.openings||[]).forEach(op=>{ const opStart=op.distance_from_start; const opWidth=op.width; const opHeight=op.height; const headerSpec=op.header_spec; openingZones.push({start:opStart,end:opStart+opWidth}); const header=createCuboidMesh({w:headerSpec.width,h:headerSpec.depth,d:opWidth},COLORS.header); header.position.set(0,opHeight+headerSpec.depth/2,opStart+opWidth/2); wallGroup.add(header); const jackStudHeight=opHeight-studSize.d; const jackStud1=createCuboidMesh({w:studSize.w,h:jackStudHeight,d:studSize.d},COLORS.stud); jackStud1.position.set(0,jackStudHeight/2+studSize.d,opStart+studSize.d/2); const jackStud2=createCuboidMesh({w:studSize.w,h:jackStudHeight,d:studSize.d},COLORS.stud); jackStud2.position.set(0,jackStudHeight/2+studSize.d,opStart+opWidth-studSize.d/2); wallGroup.add(jackStud1,jackStud2);}); for(let pos=0; pos<length; pos+=16){ const studZ=pos+studSize.d/2; const isInOpening=openingZones.some(zone=>studZ>=zone.start&&studZ<zone.end); if(!isInOpening){ const studHeight=height-(2*studSize.d); const stud=createCuboidMesh({w:studSize.w,h:studHeight,d:studSize.d},COLORS.stud); stud.position.set(0,studHeight/2+studSize.d,pos+studSize.d/2); wallGroup.add(stud);}} wallGroup.position.copy(start); wallGroup.lookAt(end); modelContainer.add(wallGroup);}
+        function processRoof(roofData){ const footprint=roofData.footprint_polygon.map(p=>new THREE.Vector3(...p)); const trussGroupData=roofData.components.find(c=>c.type==='truss_group'); if(!trussGroupData)return; const spacing=trussGroupData.spacing; const trussDef=trussGroupData.truss_definition; const span=trussDef.span; const pitch=trussDef.pitch; const pitchAngle=Math.atan(pitch.rise/pitch.run); const peakHeight=(span/2)*Math.tan(pitchAngle); const topChordLen=Math.sqrt(Math.pow(span/2,2)+Math.pow(peakHeight,2)); const depthVec=new THREE.Vector3().subVectors(footprint[3],footprint[0]); const depth=depthVec.length(); const depthDir=depthVec.normalize(); const lumberW=LUMBER_SIZES["2x4"].w; const lumberD=LUMBER_SIZES["2x4"].d; for(let d=0; d<=depth; d+=spacing){ const trussOrigin=new THREE.Vector3().copy(footprint[0]).addScaledVector(depthDir,d); const truss=new THREE.Group(); truss.position.copy(trussOrigin); const bottomChord=createCuboidMesh({w:span,h:lumberD,d:lumberW},COLORS.truss); bottomChord.position.set(span/2,lumberD/2,0); truss.add(bottomChord); const topChord1=createCuboidMesh({w:topChordLen,h:lumberD,d:lumberW},COLORS.truss); topChord1.rotation.z=pitchAngle; topChord1.position.set(span/4,peakHeight/2+lumberD/2,0); truss.add(topChord1); const topChord2=createCuboidMesh({w:topChordLen,h:lumberD,d:lumberW},COLORS.truss); topChord2.rotation.z=-pitchAngle; topChord2.position.set(span*3/4,peakHeight/2+lumberD/2,0); truss.add(topChord2); modelContainer.add(truss);}}
         
         function updateInfoPanel(data) {
             const infoPanel = document.getElementById('info-panel');
@@ -195,15 +98,45 @@
             infoPanel.innerHTML = html;
         }
 
+        // --- *** NEW HELPER FUNCTIONS FOR RETRY LOGIC *** ---
+        function delay(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        async function fetchWithRetry(url, retries, delayMs) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(url);
+                    if (response.ok) {
+                        return response; // Success!
+                    }
+                    // If file not found (404), it's likely the race condition.
+                    if (response.status === 404) {
+                        console.warn(`Attempt ${i + 1}: File not found, retrying in ${delayMs / 1000}s...`);
+                        await delay(delayMs);
+                        continue; // Try next attempt
+                    }
+                    // For other server errors, fail faster.
+                    throw new Error(`Network request failed with status: ${response.status} ${response.statusText}`);
+                } catch (error) {
+                    console.warn(`Attempt ${i + 1}: Fetch failed with error: ${error.message}. Retrying...`);
+                    await delay(delayMs);
+                }
+            }
+            throw new Error(`Failed to fetch file after ${retries} attempts.`);
+        }
+
+
         async function loadAndBuild(blueprintUrl) {
             try {
-                const response = await fetch(blueprintUrl);
-                if (!response.ok) throw new Error(`Network error: ${response.statusText}`);
+                // --- Use the new fetchWithRetry function ---
+                console.log("Attempting to fetch blueprint with retries from URL:", blueprintUrl);
+                const response = await fetchWithRetry(blueprintUrl, RETRY_ATTEMPTS, RETRY_DELAY_MS);
+                
                 const data = await response.json();
                 
                 while(modelContainer.children.length > 0) { 
-                    const child = modelContainer.children[0];
-                    modelContainer.remove(child);
+                    modelContainer.remove(modelContainer.children[0]);
                 }
 
                 (data.assembly || []).forEach(element => {
@@ -213,11 +146,9 @@
                 
                 updateInfoPanel(data);
 
-                // Center camera on the final model
                 const box = new THREE.Box3().setFromObject(modelContainer);
                 const center = box.getCenter(new THREE.Vector3());
                 const size = box.getSize(new THREE.Vector3());
-                
                 const maxDim = Math.max(size.x, size.y, size.z);
                 const fov = camera.fov * (Math.PI / 180);
                 const cameraDistance = Math.abs(maxDim / 2 / Math.tan(fov / 2));
@@ -226,14 +157,17 @@
                 camera.position.x += cameraDistance;
                 camera.position.y += cameraDistance * 0.5;
                 camera.position.z += cameraDistance;
-                
                 controls.target.copy(center);
                 controls.update();
                 
             } catch (error) {
-                console.error('Error loading or parsing blueprint:', error);
-                document.getElementById('error-message').textContent = `Error: Could not load blueprint. [${error.message}]`;
-                document.getElementById('error-message').style.display = 'block';
+                console.error('--- DETAILED BLUEPRINT LOAD ERROR ---', error);
+                let detailedMessage = `<strong>Error: Could not load blueprint.</strong><br><br>`;
+                detailedMessage += `<strong>Reason:</strong> ${error.message}<br><br>`;
+                detailedMessage += `The file might not be available yet or there was a persistent network issue. Please try generating the blueprint again.`;
+                const errorDiv = document.getElementById('error-message');
+                errorDiv.innerHTML = detailedMessage;
+                errorDiv.style.display = 'block';
             }
         }
 
@@ -255,7 +189,7 @@
         if (blueprintUrl) {
             loadAndBuild(blueprintUrl);
         } else {
-            document.getElementById('error-message').textContent = 'ERROR: No blueprint URL specified.';
+            document.getElementById('error-message').textContent = 'ERROR: No blueprint URL specified in the query string.';
             document.getElementById('error-message').style.display = 'block';
         }
         
