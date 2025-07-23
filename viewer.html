@@ -65,7 +65,7 @@
         // --- SCENE SETUP ---
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x1a1a33);
-        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 5000);
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 10000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
@@ -76,20 +76,19 @@
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
         scene.add(ambientLight);
         const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
-        directionalLight.position.set(150, 200, 100);
+        directionalLight.position.set(200, 300, 200);
         scene.add(directionalLight);
 
         const modelContainer = new THREE.Group();
         scene.add(modelContainer);
 
-        // --- HELPER FUNCTION (Simpler) ---
         function createCuboidMesh(dims, color) {
             const geometry = new THREE.BoxGeometry(dims.w, dims.h, dims.d);
             const material = new THREE.MeshLambertMaterial({ color: color });
             return new THREE.Mesh(geometry, material);
         }
 
-        // --- BLUEPRINT PROCESSING LOGIC ---
+        // --- CORRECTED BLUEPRINT LOGIC ---
         function processWall(wallData) {
             const start = new THREE.Vector3(...wallData.start_point);
             const end = new THREE.Vector3(...wallData.end_point);
@@ -100,12 +99,16 @@
             
             const direction = new THREE.Vector3().subVectors(end, start);
             const length = direction.length();
-            const angle = Math.atan2(direction.x, direction.z);
+            
+            // *** THE FIX IS HERE ***
+            // Correctly calculate the angle based on the wall's direction vector
+            const angle = Math.atan2(direction.z, direction.x);
 
+            // Position and rotate the entire wall group
             wallGroup.position.copy(start);
             wallGroup.rotation.y = angle;
 
-            // Plates (Corrected orientation)
+            // Build all components inside the rotated group, along its local X-axis
             const bottomPlate = createCuboidMesh({ w: length, h: studSize.d, d: studSize.w }, COLORS.plate);
             bottomPlate.position.set(length / 2, studSize.d / 2, 0);
             const topPlate = createCuboidMesh({ w: length, h: studSize.d, d: studSize.w }, COLORS.plate);
@@ -120,12 +123,10 @@
                 const headerSpec = op.header_spec;
                 openingZones.push({ start: opStart, end: opStart + opWidth });
 
-                // Header
                 const header = createCuboidMesh({w: opWidth, h: headerSpec.depth, d: headerSpec.width}, COLORS.header);
                 header.position.set(opStart + opWidth/2, opHeight + headerSpec.depth/2, 0);
                 wallGroup.add(header);
 
-                // Jack studs
                 const jackStudHeight = opHeight - studSize.d;
                 const jackStud1 = createCuboidMesh({w: studSize.d, h: jackStudHeight, d: studSize.w}, COLORS.stud);
                 jackStud1.position.set(opStart + studSize.d/2, jackStudHeight/2 + studSize.d, 0);
@@ -134,10 +135,9 @@
                 wallGroup.add(jackStud1, jackStud2);
             });
 
-            // Regular Studs
-            for (let pos = 0; pos <= length; pos += 16) {
-                const studX = pos + studSize.d/2;
-                const isInOpening = openingZones.some(zone => studX >= zone.start - studSize.d && studX <= zone.end + studSize.d);
+            for (let pos = 0; pos < length; pos += 16) {
+                const studX = pos + studSize.d / 2;
+                const isInOpening = openingZones.some(zone => studX >= zone.start && studX < zone.end);
                 if (!isInOpening) {
                     const studHeight = height - (2 * studSize.d);
                     const stud = createCuboidMesh({w: studSize.d, h: studHeight, d: studSize.w}, COLORS.stud);
@@ -148,7 +148,6 @@
             modelContainer.add(wallGroup);
         }
         
-        // --- CORRECTED ROOF LOGIC ---
         function processRoof(roofData) {
             const footprint = roofData.footprint_polygon.map(p => new THREE.Vector3(...p));
             const trussGroupData = roofData.components.find(c => c.type === 'truss_group');
@@ -174,18 +173,15 @@
                 const truss = new THREE.Group();
                 truss.position.copy(trussOrigin);
                 
-                // Bottom Chord
                 const bottomChord = createCuboidMesh({w: span, h: lumberD, d: lumberW}, COLORS.truss);
                 bottomChord.position.set(span / 2, lumberD / 2, 0);
                 truss.add(bottomChord);
 
-                // Top Chord 1 (Left)
                 const topChord1 = createCuboidMesh({w: topChordLen, h: lumberD, d: lumberW}, COLORS.truss);
                 topChord1.rotation.z = pitchAngle;
                 topChord1.position.set(span / 4, peakHeight / 2 + lumberD / 2, 0);
                 truss.add(topChord1);
                 
-                // Top Chord 2 (Right)
                 const topChord2 = createCuboidMesh({w: topChordLen, h: lumberD, d: lumberW}, COLORS.truss);
                 topChord2.rotation.z = -pitchAngle;
                 topChord2.position.set(span * 3 / 4, peakHeight / 2 + lumberD / 2, 0);
@@ -207,9 +203,7 @@
         async function loadAndBuild(blueprintUrl) {
             try {
                 const response = await fetch(blueprintUrl);
-                if (!response.ok) {
-                    throw new Error(`Network response error: ${response.statusText}`);
-                }
+                if (!response.ok) throw new Error(`Network error: ${response.statusText}`);
                 const data = await response.json();
                 
                 while(modelContainer.children.length > 0) { 
@@ -223,16 +217,20 @@
                 
                 updateInfoPanel(data);
 
-                // Center camera on the generated model
+                // Recalculate camera position based on the now-correct model size
                 const box = new THREE.Box3().setFromObject(modelContainer);
                 const center = box.getCenter(new THREE.Vector3());
                 const size = box.getSize(new THREE.Vector3());
                 
                 const maxDim = Math.max(size.x, size.y, size.z);
                 const fov = camera.fov * (Math.PI / 180);
-                let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+                const cameraDistance = Math.abs(maxDim / 2 / Math.tan(fov / 2));
                 
-                camera.position.set(center.x, center.y, center.z + cameraZ * 1.5);
+                camera.position.copy(center);
+                camera.position.x += cameraDistance;
+                camera.position.y += cameraDistance * 0.5;
+                camera.position.z += cameraDistance;
+                
                 controls.target.copy(center);
                 controls.update();
                 
@@ -262,9 +260,8 @@
         if (blueprintUrl) {
             loadAndBuild(blueprintUrl);
         } else {
-            const errorDiv = document.getElementById('error-message');
-            errorDiv.textContent = 'ERROR: No blueprint URL specified in the address.';
-            errorDiv.style.display = 'block';
+            document.getElementById('error-message').textContent = 'ERROR: No blueprint URL specified.';
+            document.getElementById('error-message').style.display = 'block';
         }
         
         animate();
