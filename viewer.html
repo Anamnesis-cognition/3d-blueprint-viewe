@@ -88,7 +88,7 @@
             return new THREE.Mesh(geometry, material);
         }
 
-        // --- CORRECTED BLUEPRINT LOGIC ---
+        // --- *** FINAL CORRECTED WALL LOGIC *** ---
         function processWall(wallData) {
             const start = new THREE.Vector3(...wallData.start_point);
             const end = new THREE.Vector3(...wallData.end_point);
@@ -96,25 +96,16 @@
             const studSize = LUMBER_SIZES["2x4"];
 
             const wallGroup = new THREE.Group();
-            
             const direction = new THREE.Vector3().subVectors(end, start);
             const length = direction.length();
-            
-            // *** THE FIX IS HERE ***
-            // Correctly calculate the angle based on the wall's direction vector
-            const angle = Math.atan2(direction.z, direction.x);
 
-            // Position and rotate the entire wall group
-            wallGroup.position.copy(start);
-            wallGroup.rotation.y = angle;
-
-            // Build all components inside the rotated group, along its local X-axis
-            const bottomPlate = createCuboidMesh({ w: length, h: studSize.d, d: studSize.w }, COLORS.plate);
-            bottomPlate.position.set(length / 2, studSize.d / 2, 0);
-            const topPlate = createCuboidMesh({ w: length, h: studSize.d, d: studSize.w }, COLORS.plate);
-            topPlate.position.set(length / 2, height - studSize.d / 2, 0);
+            // STEP 1: Build the wall flat at the origin, pointing down the Z-axis
+            const bottomPlate = createCuboidMesh({ w: studSize.w, h: studSize.d, d: length }, COLORS.plate);
+            bottomPlate.position.set(0, studSize.d / 2, length / 2);
+            const topPlate = createCuboidMesh({ w: studSize.w, h: studSize.d, d: length }, COLORS.plate);
+            topPlate.position.set(0, height - studSize.d / 2, length / 2);
             wallGroup.add(bottomPlate, topPlate);
-            
+
             const openingZones = [];
             (wallData.openings || []).forEach(op => {
                 const opStart = op.distance_from_start;
@@ -123,28 +114,32 @@
                 const headerSpec = op.header_spec;
                 openingZones.push({ start: opStart, end: opStart + opWidth });
 
-                const header = createCuboidMesh({w: opWidth, h: headerSpec.depth, d: headerSpec.width}, COLORS.header);
-                header.position.set(opStart + opWidth/2, opHeight + headerSpec.depth/2, 0);
+                const header = createCuboidMesh({w: headerSpec.width, h: headerSpec.depth, d: opWidth}, COLORS.header);
+                header.position.set(0, opHeight + headerSpec.depth/2, opStart + opWidth/2);
                 wallGroup.add(header);
 
                 const jackStudHeight = opHeight - studSize.d;
-                const jackStud1 = createCuboidMesh({w: studSize.d, h: jackStudHeight, d: studSize.w}, COLORS.stud);
-                jackStud1.position.set(opStart + studSize.d/2, jackStudHeight/2 + studSize.d, 0);
-                const jackStud2 = createCuboidMesh({w: studSize.d, h: jackStudHeight, d: studSize.w}, COLORS.stud);
-                jackStud2.position.set(opStart + opWidth - studSize.d/2, jackStudHeight/2 + studSize.d, 0);
+                const jackStud1 = createCuboidMesh({w: studSize.w, h: jackStudHeight, d: studSize.d}, COLORS.stud);
+                jackStud1.position.set(0, jackStudHeight/2 + studSize.d, opStart + studSize.d/2);
+                const jackStud2 = createCuboidMesh({w: studSize.w, h: jackStudHeight, d: studSize.d}, COLORS.stud);
+                jackStud2.position.set(0, jackStudHeight/2 + studSize.d, opStart + opWidth - studSize.d/2);
                 wallGroup.add(jackStud1, jackStud2);
             });
 
             for (let pos = 0; pos < length; pos += 16) {
-                const studX = pos + studSize.d / 2;
-                const isInOpening = openingZones.some(zone => studX >= zone.start && studX < zone.end);
+                const studZ = pos + studSize.d / 2;
+                const isInOpening = openingZones.some(zone => studZ >= zone.start && studZ < zone.end);
                 if (!isInOpening) {
                     const studHeight = height - (2 * studSize.d);
-                    const stud = createCuboidMesh({w: studSize.d, h: studHeight, d: studSize.w}, COLORS.stud);
-                    stud.position.set(pos + studSize.d/2, studHeight/2 + studSize.d, 0);
+                    const stud = createCuboidMesh({w: studSize.w, h: studHeight, d: studSize.d}, COLORS.stud);
+                    stud.position.set(0, studHeight/2 + studSize.d, pos + studSize.d/2);
                     wallGroup.add(stud);
                 }
             }
+            
+            // STEP 2: Position the group at the start point and make it look at the end point.
+            wallGroup.position.copy(start);
+            wallGroup.lookAt(end);
             modelContainer.add(wallGroup);
         }
         
@@ -207,7 +202,8 @@
                 const data = await response.json();
                 
                 while(modelContainer.children.length > 0) { 
-                    modelContainer.remove(modelContainer.children[0]); 
+                    const child = modelContainer.children[0];
+                    modelContainer.remove(child);
                 }
 
                 (data.assembly || []).forEach(element => {
@@ -217,7 +213,7 @@
                 
                 updateInfoPanel(data);
 
-                // Recalculate camera position based on the now-correct model size
+                // Center camera on the final model
                 const box = new THREE.Box3().setFromObject(modelContainer);
                 const center = box.getCenter(new THREE.Vector3());
                 const size = box.getSize(new THREE.Vector3());
@@ -236,9 +232,8 @@
                 
             } catch (error) {
                 console.error('Error loading or parsing blueprint:', error);
-                const errorDiv = document.getElementById('error-message');
-                errorDiv.textContent = `Error: Could not load blueprint. [${error.message}]`;
-                errorDiv.style.display = 'block';
+                document.getElementById('error-message').textContent = `Error: Could not load blueprint. [${error.message}]`;
+                document.getElementById('error-message').style.display = 'block';
             }
         }
 
