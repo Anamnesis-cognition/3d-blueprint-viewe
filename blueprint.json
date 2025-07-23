@@ -1,0 +1,138 @@
+{
+    "metadata": {
+      "project_name": "24x24 Garage",
+      "schema_version": "4.1-Pro-Detail",
+      "units": "inches",
+      "design_assumptions": [
+        "Default wall height: 108 inches",
+        "Default roof pitch: 6/12",
+        "Garage Door: 192x84 inches"
+      ]
+    },
+    "assembly": [
+      {
+        "type": "framed_wall_3d",
+        "name": "Front Wall",
+        "start_point": [
+          0,
+          0,
+          0
+        ],
+        "end_point": [
+          288,
+          0,
+          0
+        ],
+        "height": 108,
+        "openings": [
+          {
+            "type": "wall_opening_3d",
+            "name": "Garage Door",
+            "distance_from_start": 72,
+            "width": 192,
+            "height": 84,
+            "header_spec": {
+              "material": "LVL",
+              "depth": 14,
+              "width": 3.5
+            }
+          }
+        ]
+      },
+      {
+        "type": "framed_wall_3d",
+        "name": "Right Wall",
+        "start_point": [
+          288,
+          0,
+          0
+        ],
+        "end_point": [
+          288,
+          0,
+          288
+        ],
+        "height": 108,
+        "openings": []
+      },
+      {
+        "type": "framed_wall_3d",
+        "name": "Back Wall",
+        "start_point": [
+          288,
+          0,
+          288
+        ],
+        "end_point": [
+          0,
+          0,
+          288
+        ],
+        "height": 108,
+        "openings": []
+      },
+      {
+        "type": "framed_wall_3d",
+        "name": "Left Wall",
+        "start_point": [
+          0,
+          0,
+          288
+        ],
+        "end_point": [
+          0,
+          0,
+          0
+        ],
+        "height": 108,
+        "openings": []
+      },
+      {
+        "type": "roof_system_3d",
+        "name": "Main Roof",
+        "roof_shape": "gable",
+        "footprint_polygon": [
+          [
+            0,
+            108,
+            0
+          ],
+          [
+            288,
+            108,
+            0
+          ],
+          [
+            288,
+            108,
+            288
+          ],
+          [
+            0,
+            108,
+            288
+          ]
+        ],
+        "pitch": {
+          "rise": 6,
+          "run": 12
+        },
+        "eave_overhang": 12,
+        "components": [
+          {
+            "type": "truss_group",
+            "truss_style": "Fink",
+            "spacing": 24,
+            "lumber_spec": "2x4",
+            "truss_definition": {
+              "span": 288,
+              "pitch": {
+                "rise": 6,
+                "run": 12
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
