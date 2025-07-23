@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Blueprint Viewer</title>
+    <style>
+        body { margin: 0; background-color: #1a1a33; color: #fff; }
+        canvas { display: block; }
+        #info-panel {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 350px;
+            height: 100%;
+            background-color: rgba(10, 10, 25, 0.85);
+            padding: 20px;
+            box-sizing: border-box;
+            font-family: monospace;
+            overflow-y: auto;
+            line-height: 1.6;
+        }
+        h2 { border-bottom: 1px solid #444; padding-bottom: 10px; margin-top: 0;}
+        .spec-item { margin-left: 15px; }
+        .controls { margin-top: 30px; }
+        .error-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: red;
+            background: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            font-size: 1.2em;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="info-panel"></div>
+    <div id="error-message" style="display: none;"></div>
+
+    <!-- Import Three.js and OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+        // --- CONFIGURATION ---
+        const COLORS = {
+            stud: new THREE.Color(0xccb28c),
+            plate: new THREE.Color(0xb29973),
+            header: new THREE.Color(0x99664c),
+            truss: new THREE.Color(0xbfb280)
+        };
+        const LUMBER_SIZES = { "2x4": { w: 1.5, d: 3.5 } };
+        const INCHES_TO_FEET = 1 / 12;
+
+        // --- SCENE SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a33);
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 5000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.1;
+        
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        directionalLight.position.set(-1, 1, 1);
+        scene.add(directionalLight);
+
+        const modelContainer = new THREE.Group();
+        scene.add(modelContainer);
+
+        // --- CORE DRAWING FUNCTION ---
+        function drawCuboid(dims, pos, color, rot = { angle: 0, axis: 'y' }) {
+            const geometry = new THREE.BoxGeometry(dims.w, dims.h, dims.d);
+            const material = new THREE.MeshLambertMaterial({ color: color });
+            const cuboid = new THREE.Mesh(geometry, material);
+            
+            cuboid.position.set(pos.x, pos.y, pos.z);
+            
+            if (rot.angle !== 0) {
+                const angleRad = THREE.MathUtils.degToRad(rot.angle);
+                if (rot.axis === 'y') cuboid.rotation.y = angleRad;
+                if (rot.axis === 'x') cuboid.rotation.x = angleRad;
+                if (rot.axis === 'z') cuboid.rotation.z = angleRad;
+            }
+            
+            return cuboid;
+        }
+
+        // --- BLUEPRINT PROCESSING LOGIC ---
+        function processWall(wallData) {
+            const start = new THREE.Vector3(...wallData.start_point);
+            const end = new THREE.Vector3(...wallData.end_point);
+            const height = wallData.height || 108;
+            const studSize = LUMBER_SIZES["2x4"];
+
+            const wallGroup = new THREE.Group();
+            
+            const direction = new THREE.Vector3().subVectors(end, start);
+            const length = direction.length();
+            const angle = Math.atan2(direction.x, direction.z);
+
+            wallGroup.position.copy(start);
+            wallGroup.rotation.y = -angle;
+
+            // Plates
+            const bottomPlate = drawCuboid({ w: length, h: studSize.d, d: studSize.w }, { x: length / 2, y: studSize.d / 2, z: 0 }, COLORS.plate);
+            const topPlate = drawCuboid({ w: length, h: studSize.d, d: studSize.w }, { x: length / 2, y: height - studSize.d / 2, z: 0 }, COLORS.plate);
+            wallGroup.add(bottomPlate, topPlate);
+
+            const openingZones = [];
+            (wallData.openings || []).forEach(op => {
+                const opStart = op.distance_from_start;
+                const opWidth = op.width;
+                const opHeight = op.height;
+                const headerSpec = op.header_spec;
+                openingZones.push({ start: opStart, end: opStart + opWidth });
+
+                // Header
+                const header = drawCuboid({w: opWidth, h: headerSpec.depth, d: headerSpec.width}, {x: opStart + opWidth/2, y: opHeight + headerSpec.depth/2, z:0}, COLORS.header);
+                wallGroup.add(header);
+
+                // Jack studs
+                const jackStudHeight = opHeight - studSize.d;
+                const jackStud1 = drawCuboid({w: studSize.d, h: jackStudHeight, d: studSize.w}, {x: opStart + studSize.d/2, y: jackStudHeight/2 + studSize.d, z:0 }, COLORS.stud);
+                const jackStud2 = drawCuboid({w: studSize.d, h: jackStudHeight, d: studSize.w}, {x: opStart + opWidth - studSize.d/2, y: jackStudHeight/2 + studSize.d, z:0 }, COLORS.stud);
+                wallGroup.add(jackStud1, jackStud2);
+            });
+
+            // Regular Studs
+            for (let pos = 0; pos <= length; pos += 16) {
+                const isInOpening = openingZones.some(zone => pos > zone.start && pos < zone.end);
+                if (!isInOpening) {
+                    const studHeight = height - (2 * studSize.d);
+                    const stud = drawCuboid({w: studSize.d, h: studHeight, d: studSize.w}, {x: pos + studSize.d/2, y: studHeight/2 + studSize.d, z:0 }, COLORS.stud);
+                    wallGroup.add(stud);
+                }
+            }
+            modelContainer.add(wallGroup);
+        }
+        
+        function processRoof(roofData) {
+            const footprint = roofData.footprint_polygon.map(p => new THREE.Vector3(...p));
+            const trussGroupData = roofData.components.find(c => c.type === 'truss_group');
+            if (!trussGroupData) return;
+
+            const spacing = trussGroupData.spacing;
+            const trussDef = trussGroupData.truss_definition;
+            const span = trussDef.span;
+            const pitch = trussDef.pitch;
+            const pitchAngle = Math.atan(pitch.rise / pitch.run);
+            const peakHeight = (span / 2) * Math.tan(pitchAngle);
+            const topChordLen = Math.sqrt(Math.pow(span / 2, 2) + Math.pow(peakHeight, 2));
+
+            const depthVec = new THREE.Vector3().subVectors(footprint[3], footprint[0]);
+            const depth = depthVec.length();
+            const depthDir = depthVec.normalize();
+            
+            for (let d = 0; d <= depth; d += spacing) {
+                const trussOrigin = new THREE.Vector3().copy(footprint[0]).addScaledVector(depthDir, d);
+                const truss = new THREE.Group();
+                truss.position.copy(trussOrigin);
+                
+                const lumberW = LUMBER_SIZES["2x4"].w;
+                const lumberD = LUMBER_SIZES["2x4"].d;
+
+                // Bottom Chord
+                truss.add(drawCuboid({w: span, h: lumberD, d: lumberW}, {x: span/2, y: lumberD/2, z:0}, COLORS.truss));
+                // Top Chords
+                const topChord1 = drawCuboid({w: topChordLen, h: lumberD, d: lumberW}, {x:topChordLen/2, y:lumberD/2, z:0}, COLORS.truss);
+                topChord1.position.set(0,0,0);
+                topChord1.rotation.z = pitchAngle;
+                topChord1.position.x = (span / 4);
+                topChord1.position.y = peakHeight / 2;
+                
+                const topChord2 = drawCuboid({w: topChordLen, h: lumberD, d: lumberW}, {x:topChordLen/2, y:lumberD/2, z:0}, COLORS.truss);
+                topChord2.position.set(span,0,0);
+                topChord2.rotation.z = -pitchAngle;
+                topChord2.position.x = (span * 3/4);
+                topChord2.position.y = peakHeight / 2;
+
+                truss.add(topChord1, topChord2);
+                modelContainer.add(truss);
+            }
+        }
+        
+        function updateInfoPanel(data) {
+            const infoPanel = document.getElementById('info-panel');
+            const metadata = data.metadata || {};
+            let html = `<h2>${metadata.project_name || 'Blueprint'}</h2>`;
+            html += `<p>Units: ${metadata.units || 'Inches'}</p>`;
+            html += `<hr><p><b>Controls:</b><br>Drag to Rotate<br>Right-Click/Drag to Pan<br>Scroll to Zoom</p>`;
+            infoPanel.innerHTML = html;
+        }
+
+        // --- LOAD AND RENDER ---
+        async function loadAndBuild(blueprintUrl) {
+            try {
+                const response = await fetch(blueprintUrl);
+                if (!response.ok) {
+                    throw new Error(`Network response was not ok: ${response.statusText}`);
+                }
+                const data = await response.json();
+                
+                // Clear previous model
+                while(modelContainer.children.length > 0){ 
+                    modelContainer.remove(modelContainer.children[0]); 
+                }
+
+                // Build new model
+                (data.assembly || []).forEach(element => {
+                    if (element.type === 'framed_wall_3d') processWall(element);
+                    if (element.type === 'roof_system_3d') processRoof(element);
+                });
+                
+                updateInfoPanel(data);
+
+                // Center the camera
+                const box = new THREE.Box3().setFromObject(modelContainer);
+                const center = box.getCenter(new THREE.Vector3());
+                const size = box.getSize(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const fov = camera.fov * (Math.PI / 180);
+                let cameraZ = Math.abs(maxDim / 2 * Math.tan(fov * 2));
+                cameraZ *= 1.5; // zoom out a bit
+                
+                camera.position.set(center.x, center.y + size.y/4, center.z + cameraZ);
+                controls.target.copy(center);
+                modelContainer.position.sub(center); // Center the model at the origin
+                
+            } catch (error) {
+                console.error('Error loading or parsing blueprint:', error);
+                const errorDiv = document.getElementById('error-message');
+                errorDiv.textContent = `Could not load blueprint. Please check the URL and file format. [${error}]`;
+                errorDiv.style.display = 'block';
+            }
+        }
+
+        // --- ANIMATION LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // --- RESIZE HANDLER ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }, false);
+        
+        // --- INITIALIZATION ---
+        // Get the blueprint URL from the query string (e.g., viewer.html?blueprint=URL_TO_JSON)
+        const urlParams = new URLSearchParams(window.location.search);
+        const blueprintUrl = urlParams.get('blueprint');
+        
+        if (blueprintUrl) {
+            loadAndBuild(blueprintUrl);
+        } else {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.textContent = 'ERROR: No blueprint URL specified. Please add "?blueprint=URL_TO_YOUR_JSON" to the address.';
+            errorDiv.style.display = 'block';
+        }
+        
+        animate();
+    </script>
+</body>
+</html>
